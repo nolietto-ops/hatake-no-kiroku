@@ -77,7 +77,10 @@
 
     input,
     textarea {
+      display: block;
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       border: 1px solid #d7b98d;
       border-radius: 8px;
       background: #fffdf7;
@@ -85,7 +88,18 @@
       font: inherit;
       padding: 12px 13px;
       outline: none;
-      box-sizing: border-box;
+    }
+
+    input[type="date"] {
+      min-height: 56px;
+      text-align: center;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    input[type="date"]::-webkit-date-and-time-value {
+      margin: 0;
+      text-align: center;
     }
 
     input:focus,
