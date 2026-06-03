@@ -67,6 +67,74 @@
       padding: 18px;
     }
 
+    .calendar {
+      margin-bottom: 18px;
+    }
+
+    .calendar-header {
+      display: grid;
+      grid-template-columns: 64px 1fr 64px;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .calendar-header strong {
+      color: var(--soil-dark);
+      font-size: 1.05rem;
+      text-align: center;
+    }
+
+    .calendar-header button {
+      min-height: 40px;
+      background: #ead7b8;
+      color: var(--soil-dark);
+      font-size: 0.9rem;
+    }
+
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .calendar-day,
+    .calendar-weekday {
+      min-height: 38px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+    }
+
+    .calendar-weekday {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .calendar-day {
+      border: 1px solid #d7b98d;
+      background: #fffdf7;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+
+    .calendar-day.has-record {
+      background: #e4efd8;
+      border-color: var(--leaf);
+      color: var(--leaf-dark);
+    }
+
+    .calendar-day.selected {
+      background: var(--leaf);
+      color: #fff;
+    }
+
+    .calendar-day:disabled {
+      opacity: 0;
+      pointer-events: none;
+    }
+
     label {
       display: block;
       color: var(--muted);
@@ -100,6 +168,10 @@
     input[type="date"]::-webkit-date-and-time-value {
       margin: 0;
       text-align: center;
+    }
+
+    input[type="file"] {
+      padding: 10px;
     }
 
     input:focus,
@@ -204,6 +276,29 @@
       overflow-wrap: anywhere;
     }
 
+    .photo-preview,
+    .record-photos {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .photo-preview:empty,
+    .record-photos:empty {
+      display: none;
+    }
+
+    .photo-preview img,
+    .record-photos img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #d7b98d;
+      background: #fffdf7;
+    }
+
     @media (max-width: 420px) {
       main {
         padding-inline: 14px;
@@ -224,6 +319,15 @@
 
     <section class="panel" aria-label="畑の記録入力">
       <form id="record-form">
+        <section class="calendar" aria-label="記録カレンダー">
+          <div class="calendar-header">
+            <button type="button" id="prev-month">前月</button>
+            <strong id="calendar-title"></strong>
+            <button type="button" id="next-month">次月</button>
+          </div>
+          <div class="calendar-grid" id="calendar-grid"></div>
+        </section>
+
         <div class="field">
           <label for="date">日付</label>
           <input id="date" name="date" type="date" required>
@@ -231,7 +335,13 @@
 
         <div class="field">
           <label for="memo">メモ</label>
-          <textarea id="memo" name="memo" placeholder="例：トマトに水やり。きゅうりの花が咲いた。" required></textarea>
+          <textarea id="memo" name="memo" placeholder="例：トマトに水やり。きゅうりの花が咲いた。"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="photos">写真</label>
+          <input id="photos" name="photos" type="file" accept="image/*" multiple>
+          <div class="photo-preview" id="photo-preview" aria-label="この日の写真"></div>
         </div>
 
         <div class="actions">
@@ -253,28 +363,73 @@
     const form = document.querySelector("#record-form");
     const dateInput = document.querySelector("#date");
     const memoInput = document.querySelector("#memo");
+    const photoInput = document.querySelector("#photos");
+    const photoPreview = document.querySelector("#photo-preview");
+    const calendarTitle = document.querySelector("#calendar-title");
+    const calendarGrid = document.querySelector("#calendar-grid");
+    const prevMonthButton = document.querySelector("#prev-month");
+    const nextMonthButton = document.querySelector("#next-month");
     const clearButton = document.querySelector("#clear-button");
     const message = document.querySelector("#message");
     const empty = document.querySelector("#empty");
     const recordList = document.querySelector("#record-list");
-    const storageKey = "hatake-no-kiroku-records";
+    const storageKey = "hatake-no-kiroku";
+    const oldStorageKey = "hatake-no-kiroku-records";
 
     const today = new Date();
     const localToday = new Date(today.getTime() - today.getTimezoneOffset() * 60000)
       .toISOString()
       .slice(0, 10);
     dateInput.value = localToday;
+    let calendarDate = new Date(`${localToday}T00:00:00`);
 
-    function loadRecords() {
-      try {
-        return JSON.parse(localStorage.getItem(storageKey)) || [];
-      } catch {
-        return [];
-      }
+    function createEmptyStore() {
+      return {
+        version: 1,
+        days: {}
+      };
     }
 
-    function saveRecords(records) {
-      localStorage.setItem(storageKey, JSON.stringify(records));
+    function loadStore() {
+      try {
+        const savedStore = JSON.parse(localStorage.getItem(storageKey));
+        if (savedStore && savedStore.version === 1 && savedStore.days) {
+          return savedStore;
+        }
+      } catch {
+        return createEmptyStore();
+      }
+
+      return migrateOldRecords();
+    }
+
+    function saveStore(store) {
+      localStorage.setItem(storageKey, JSON.stringify(store));
+    }
+
+    function migrateOldRecords() {
+      const store = createEmptyStore();
+
+      try {
+        const oldRecords = JSON.parse(localStorage.getItem(oldStorageKey)) || [];
+        oldRecords.forEach((record) => {
+          if (!record.date || !record.memo) return;
+          store.days[record.date] = {
+            date: record.date,
+            memo: record.memo,
+            photos: [],
+            updatedAt: record.createdAt || new Date().toISOString()
+          };
+        });
+      } catch {
+        return store;
+      }
+
+      if (Object.keys(store.days).length > 0) {
+        saveStore(store);
+      }
+
+      return store;
     }
 
     function formatDate(value) {
@@ -282,8 +437,69 @@
       return `${year}年${Number(month)}月${Number(day)}日`;
     }
 
+    function toDateKey(date) {
+      const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+      return localDate.toISOString().slice(0, 10);
+    }
+
+    function renderCalendar() {
+      const store = loadStore();
+      const year = calendarDate.getFullYear();
+      const month = calendarDate.getMonth();
+
+      calendarTitle.textContent = `${year}年${month + 1}月`;
+      calendarGrid.innerHTML = "";
+
+      ["日", "月", "火", "水", "木", "金", "土"].forEach((weekday) => {
+        const label = document.createElement("div");
+        label.className = "calendar-weekday";
+        label.textContent = weekday;
+        calendarGrid.append(label);
+      });
+
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+
+      for (let index = 0; index < firstDay.getDay(); index += 1) {
+        const blank = document.createElement("button");
+        blank.type = "button";
+        blank.className = "calendar-day";
+        blank.disabled = true;
+        calendarGrid.append(blank);
+      }
+
+      for (let day = 1; day <= lastDay.getDate(); day += 1) {
+        const current = new Date(year, month, day);
+        const dateKey = toDateKey(current);
+        const button = document.createElement("button");
+
+        button.type = "button";
+        button.className = "calendar-day";
+        button.textContent = day;
+
+        if (store.days[dateKey]) {
+          button.classList.add("has-record");
+        }
+
+        if (dateInput.value === dateKey) {
+          button.classList.add("selected");
+        }
+
+        button.addEventListener("click", () => {
+          dateInput.value = dateKey;
+          loadSelectedDateMemo();
+          renderCalendar();
+        });
+
+        calendarGrid.append(button);
+      }
+    }
+
     function renderRecords() {
-      const records = loadRecords();
+      const store = loadStore();
+      const records = Object.values(store.days)
+        .sort((a, b) => b.date.localeCompare(a.date));
+
       recordList.innerHTML = "";
       empty.hidden = records.length > 0;
 
@@ -298,42 +514,163 @@
         const text = document.createElement("p");
         text.textContent = record.memo;
 
-        item.append(time, text);
+        const photos = document.createElement("div");
+        photos.className = "record-photos";
+
+        (record.photos || []).forEach((photo) => {
+          const image = document.createElement("img");
+          image.src = photo.dataUrl;
+          image.alt = photo.name || "畑の写真";
+          photos.append(image);
+        });
+
+        item.append(time, text, photos);
         recordList.append(item);
       });
     }
 
-    form.addEventListener("submit", (event) => {
+    function renderPhotoPreview(photos) {
+      photoPreview.innerHTML = "";
+
+      photos.forEach((photo) => {
+        const image = document.createElement("img");
+        image.src = photo.dataUrl;
+        image.alt = photo.name || "畑の写真";
+        photoPreview.append(image);
+      });
+    }
+
+    function loadSelectedDateMemo() {
+      const store = loadStore();
+      const record = store.days[dateInput.value];
+      memoInput.value = record ? record.memo : "";
+      photoInput.value = "";
+      renderPhotoPreview(record?.photos || []);
+      message.textContent = record ? "この日の記録を読み込みました。" : "";
+    }
+
+    function loadImage(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = dataUrl;
+      });
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function resizePhoto(file) {
+      const dataUrl = await readFileAsDataUrl(file);
+      const image = await loadImage(dataUrl);
+      const maxSize = 1200;
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      return {
+        id: `photo_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: file.name,
+        type: "image/jpeg",
+        dataUrl: canvas.toDataURL("image/jpeg", 0.72),
+        createdAt: new Date().toISOString()
+      };
+    }
+
+    async function createPhotosFromInput() {
+      const files = Array.from(photoInput.files || []);
+      const photos = [];
+
+      for (const file of files) {
+        if (file.type.startsWith("image/")) {
+          photos.push(await resizePhoto(file));
+        }
+      }
+
+      return photos;
+    }
+
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const memo = memoInput.value.trim();
+      const store = loadStore();
+      const currentRecord = store.days[dateInput.value];
+      const selectedPhotoCount = photoInput.files ? photoInput.files.length : 0;
 
-      if (!memo) {
-        message.textContent = "メモを書いてから保存してください。";
+      if (!memo && !currentRecord?.photos?.length && selectedPhotoCount === 0) {
+        message.textContent = "メモか写真を入れてから保存してください。";
         memoInput.focus();
         return;
       }
 
-      const records = loadRecords();
-      records.unshift({
-        date: dateInput.value,
-        memo,
-        createdAt: new Date().toISOString()
-      });
-      saveRecords(records);
+      const saveButton = form.querySelector(".save");
+      saveButton.disabled = true;
+      message.textContent = "保存しています。";
 
-      memoInput.value = "";
-      dateInput.value = localToday;
-      message.textContent = "保存しました。";
-      renderRecords();
+      try {
+        const newPhotos = await createPhotosFromInput();
+        const photos = [
+          ...(currentRecord?.photos || []),
+          ...newPhotos
+        ];
+
+        store.days[dateInput.value] = {
+          date: dateInput.value,
+          memo,
+          photos,
+          updatedAt: new Date().toISOString()
+        };
+        saveStore(store);
+
+        photoInput.value = "";
+        renderPhotoPreview(photos);
+        message.textContent = "保存しました。";
+        renderRecords();
+        renderCalendar();
+      } catch {
+        message.textContent = "写真の保存に失敗しました。別の写真で試してください。";
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    dateInput.addEventListener("change", () => {
+      calendarDate = new Date(`${dateInput.value}T00:00:00`);
+      loadSelectedDateMemo();
+      renderCalendar();
+    });
+
+    prevMonthButton.addEventListener("click", () => {
+      calendarDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1);
+      renderCalendar();
+    });
+
+    nextMonthButton.addEventListener("click", () => {
+      calendarDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1);
+      renderCalendar();
     });
 
     clearButton.addEventListener("click", () => {
       memoInput.value = "";
+      photoInput.value = "";
       message.textContent = "";
       memoInput.focus();
     });
 
     renderRecords();
+    loadSelectedDateMemo();
+    renderCalendar();
   </script>
 </body>
 </html>
