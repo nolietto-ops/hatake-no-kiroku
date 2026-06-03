@@ -195,6 +195,13 @@
       margin-top: 16px;
     }
 
+    .backup-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
     button {
       min-height: 48px;
       border: 0;
@@ -223,6 +230,16 @@
       width: 86px;
       background: #ead7b8;
       color: var(--soil-dark);
+    }
+
+    .backup-button {
+      background: #ead7b8;
+      color: var(--soil-dark);
+      font-size: 0.95rem;
+    }
+
+    .restore-input {
+      display: none;
     }
 
     .message {
@@ -348,6 +365,11 @@
           <button class="save" type="submit">保存する</button>
           <button class="clear" type="button" id="clear-button">消す</button>
         </div>
+        <div class="backup-actions" aria-label="バックアップと復元">
+          <button class="backup-button" type="button" id="backup-button">バックアップ</button>
+          <button class="backup-button" type="button" id="restore-button">復元</button>
+          <input class="restore-input" id="restore-file" type="file" accept="application/json,.json">
+        </div>
         <p class="message" id="message" aria-live="polite"></p>
       </form>
     </section>
@@ -370,10 +392,14 @@
     const prevMonthButton = document.querySelector("#prev-month");
     const nextMonthButton = document.querySelector("#next-month");
     const clearButton = document.querySelector("#clear-button");
+    const backupButton = document.querySelector("#backup-button");
+    const restoreButton = document.querySelector("#restore-button");
+    const restoreFileInput = document.querySelector("#restore-file");
     const message = document.querySelector("#message");
     const empty = document.querySelector("#empty");
     const recordList = document.querySelector("#record-list");
-    const storageKey = "hatake-no-kiroku";
+    const storageKey = "hatakeData";
+    const legacyStorageKey = "hatake-no-kiroku";
     const oldStorageKey = "hatake-no-kiroku-records";
 
     const today = new Date();
@@ -400,11 +426,31 @@
         return createEmptyStore();
       }
 
+      try {
+        const legacyStore = JSON.parse(localStorage.getItem(legacyStorageKey));
+        if (legacyStore && legacyStore.version === 1 && legacyStore.days) {
+          saveStore(legacyStore);
+          return legacyStore;
+        }
+      } catch {
+        return createEmptyStore();
+      }
+
       return migrateOldRecords();
     }
 
     function saveStore(store) {
       localStorage.setItem(storageKey, JSON.stringify(store));
+    }
+
+    function isValidStore(store) {
+      return Boolean(
+        store &&
+        store.version === 1 &&
+        store.days &&
+        typeof store.days === "object" &&
+        !Array.isArray(store.days)
+      );
     }
 
     function migrateOldRecords() {
@@ -601,6 +647,57 @@
       return photos;
     }
 
+    function downloadBackup() {
+      const store = loadStore();
+      const json = JSON.stringify(store, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = `hatakeData-${localToday}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      message.textContent = "バックアップを書き出しました。";
+    }
+
+    function refreshCurrentView() {
+      loadSelectedDateMemo();
+      renderRecords();
+      renderCalendar();
+    }
+
+    async function restoreBackup(file) {
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const importedStore = JSON.parse(text);
+
+        if (!isValidStore(importedStore)) {
+          message.textContent = "復元できないJSONです。";
+          return;
+        }
+
+        const ok = window.confirm("現在の記録を、選んだバックアップで置き換えます。よろしいですか？");
+        if (!ok) {
+          message.textContent = "復元をキャンセルしました。";
+          return;
+        }
+
+        saveStore(importedStore);
+        refreshCurrentView();
+        message.textContent = "バックアップから復元しました。";
+      } catch {
+        message.textContent = "JSONファイルの読み込みに失敗しました。";
+      } finally {
+        restoreFileInput.value = "";
+      }
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const memo = memoInput.value.trim();
@@ -659,6 +756,16 @@
     nextMonthButton.addEventListener("click", () => {
       calendarDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1);
       renderCalendar();
+    });
+
+    backupButton.addEventListener("click", downloadBackup);
+
+    restoreButton.addEventListener("click", () => {
+      restoreFileInput.click();
+    });
+
+    restoreFileInput.addEventListener("change", () => {
+      restoreBackup(restoreFileInput.files?.[0]);
     });
 
     clearButton.addEventListener("click", () => {
